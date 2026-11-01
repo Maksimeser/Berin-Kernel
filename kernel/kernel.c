@@ -15,7 +15,7 @@
 #include "pic.h"
 #include "pit.h"
 #include "keyboard.h"
-#include "kerbash.h" // <-- ДОБАВЛЕНО
+#include "kerbash.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -373,14 +373,20 @@ void kernel_main(struct boot_info *binfo) {
     kb_init();
     pic_unmask(0);
     pic_unmask(1);
+
+    extern int kb_ready(void);
+    extern char kb_getchar(void);
+    while (kb_ready()) {
+        kb_getchar();
+    }
+
+    while (serial_rx_ready()) {
+        serial_read_char();
+    }
+
     __asm__ __volatile__("sti");
 
-    term_write("Berin loaded!\n\n");
-    term_write(" /\\     /\\\n");
-    term_write("/  \\___/  \\\n");
-    term_write("(  o   o  )\n");
-    term_write(" \\   \x1F   /\n");
-    term_write("  \\_____/\n\n");
+    term_write("Berin 0.0.4 loaded!\n\n");
 
     __asm__ __volatile__("wbinvd");
     sched_init();

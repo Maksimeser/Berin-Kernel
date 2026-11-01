@@ -1,5 +1,6 @@
 #include "syscall.h"
 #include "vfs.h"
+#include "kstring.h"
 #include "elf.h"
 #include "sched.h"
 #include "paging.h"
@@ -164,7 +165,105 @@ static uint64_t sys_spawn(const char *path, uint64_t uid) {
     return t->pid;
 }
 
+static uint64_t sys_fork(struct regs *r) {
+    uint64_t *new_pml4 = vmm_fork_pml4();
+    if (!new_pml4) return (uint64_t)-1;
+
+    struct task *t = task_create(r->rip, new_pml4, r->rsp);
+    if (!t) return (uint64_t)-1;
+
+    t->uid = current_task->uid;
+
+    return t->pid;
+}
+
 /* ================= ДИСПЕТЧЕР ================= */
+
+static uint64_t sys_execve(struct regs *r, const char *path, char *const argv[]) {
+    if (!path) return (uint64_t)-1;
+
+    uint32_t size; uint8_t type;
+    if (vfs_stat(path, &size, &type) != 0) return (uint64_t)-1;
+
+    void *code = kmalloc(size);
+    if (!code) return (uint64_t)-1;
+
+    int fd = vfs_open(path, O_RDONLY);
+    if (fd < 0) { kfree(code); return (uint64_t)-1; }
+    vfs_read(fd, code, size);
+    vfs_close(fd);
+
+    uint64_t *new_pml4 = vmm_create_pml4();
+    if (!new_pml4) { kfree(code); return (uint64_t)-1; }
+
+    uint64_t entry = 0;
+    if (elf_load(code, size, new_pml4, &entry) != 0) {
+        kfree(code);
+        return (uint64_t)-1;
+    }
+    kfree(code);
+
+    void *stack_phys = pmm_alloc_page();
+    if (!stack_phys) return (uint64_t)-1;
+    extern void *memset(void *dst, int c, size_t n);
+    memset(stack_phys, 0, 4096);
+
+    uint64_t user_stack_vaddr = 0x7FFFFFFFE000;
+    vmm_map_page(new_pml4, user_stack_vaddr, (uint64_t)stack_phys, 0x07);
+
+    // --- СБОРКА СТЕКА АРГУМЕНТОВ ---
+    int argc = 0;
+    if (argv) {
+        while (argv[argc]) argc++;
+    }
+
+    // Временный массив для физических адресов строк
+    uint64_t *argv_phys = (uint64_t *)kmalloc(sizeof(uint64_t) * (argc + 1));
+    if (!argv_phys) return (uint64_t)-1;
+
+    uint64_t stack_phys_top = (uint64_t)stack_phys + 4096;
+
+    // 1. Копируем строки на стек
+    for (int i = 0; i < argc; i++) {
+        int len = 0;
+        while (argv[i][len]) len++; // Считаем длину
+        len++; // +1 для нуль-терминатора
+
+        stack_phys_top -= len;
+        memcpy((void*)stack_phys_top, argv[i], len);
+        argv_phys[i] = stack_phys_top;
+    }
+
+    // 2. Выравниваем стек по 16 байт (требование ABI)
+    stack_phys_top &= ~0xFULL;
+
+    // 3. Формируем стек: envp(NULL), argv[argc](NULL), argv[], argc
+    stack_phys_top -= 8; *(uint64_t*)stack_phys_top = 0; // envp
+
+    stack_phys_top -= 8; *(uint64_t*)stack_phys_top = 0; // NULL для argv
+
+    for (int i = argc - 1; i >= 0; i--) {
+        stack_phys_top -= 8;
+        // Переводим физический адрес обратно в виртуальный для программы
+        uint64_t virt_addr = user_stack_vaddr + (argv_phys[i] - (uint64_t)stack_phys);
+        *(uint64_t*)stack_phys_top = virt_addr;
+    }
+
+    stack_phys_top -= 8;
+    *(uint64_t*)stack_phys_top = argc; // argc
+
+    uint64_t user_rsp = user_stack_vaddr + (stack_phys_top - (uint64_t)stack_phys);
+
+    kfree(argv_phys);
+
+    current_task->pml4 = new_pml4;
+    __asm__ __volatile__("mov %0, %%cr3" :: "r"(new_pml4));
+
+    r->rip = entry;
+    r->rsp = user_rsp;
+
+    return 0;
+}
 
 static uint64_t sys_read_noecho(void *buf, uint64_t len) {
     extern char berin_input_getchar(void);
@@ -260,8 +359,8 @@ void syscall_dispatch(struct regs *r) {
         case SYS_LISTDIR: ret = sys_listdir((const char *)a1, (uint32_t *)a2, (char *)a3, (uint32_t *)r->r10, (uint8_t *)r->r8);           break;
         case 83:          ret = sys_mkdir((const char *)a1, a2);     break;
         case 87:          ret = sys_unlink((const char *)a1);        break;
-        case 57:          ret = (uint64_t)-1;                        break;
-        case 59:          ret = (uint64_t)-1;                        break;
+        case 57:          ret = sys_fork(r);                         break;
+        case 59:          ret = sys_execve(r, (const char *)a1, (char *const *)a2); break;
         case 60:          sys_exit(a1);                              break;
         case 61:          ret = sys_wait4(a1, (int *)a2);            break;
         case 102:         ret = sys_getuid();                        break;

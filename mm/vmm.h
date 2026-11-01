@@ -19,4 +19,6 @@ uint64_t vmm_get_phys(uint64_t *pml4, uint64_t vaddr);
 /* Загрузить PML4 в CR3 */
 void vmm_switch_pml4(uint64_t *pml4);
 
+uint64_t *vmm_fork_pml4(void);
+
 #endif

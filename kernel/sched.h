@@ -18,8 +18,8 @@
 
 
 struct task {
-    uint32_t pid;
-    uint32_t parent_pid;
+    uint64_t pid;
+    uint64_t parent_pid;
     uint32_t state;
     int      exit_code;
     uint32_t uid;

@@ -5,25 +5,22 @@ bits 64
 
 global switch_to
 switch_to:
-    ; rdi = prev, rsi = next
+    push r15
+    push r14
+    push r13
+    push r12
     push rbp
     push rbx
-    push r12
-    push r13
-    push r14
-    push r15
 
-    ; Сохраняем текущий RSP в prev->kernel_rsp (смещение 16)
-    mov [rdi + 24], rsp
-    mov rsp, [rsi + 24]
+    mov [rdi + 32], rsp
+    mov rsp, [rsi + 32]
 
-    ; Восстанавливаем регистры нового процесса
     pop r15
     pop r14
     pop r13
     pop r12
-    pop rbx
     pop rbp
+    pop rbx
     ret
 
 global task_ret_to_user

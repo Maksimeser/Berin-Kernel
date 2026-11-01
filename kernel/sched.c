@@ -63,13 +63,13 @@ struct task *task_create(uint64_t entry, uint64_t *pml4, uint64_t user_rsp) {
     t->kstack_top  = (uint64_t)kstack + KSTACK_PAGES * 4096;
 
     uint64_t *sp = (uint64_t *)t->kstack_top;
-    *--sp = 0x23;       // SS
-    *--sp = user_rsp;   // RSP
-    *--sp = 0x202;      // RFLAGS
-    *--sp = 0x1B;       // CS
-    *--sp = entry;      // RIP
-    *--sp = (uint64_t)task_ret_to_user; // Адрес возврата для switch_to
-    for (int i = 0; i < 6; i++) *--sp = 0; // 6 регистров
+    *--sp = 0x23;
+    *--sp = user_rsp;
+    *--sp = 0x202;
+    *--sp = 0x1B;
+    *--sp = entry;
+    *--sp = (uint64_t)task_ret_to_user;
+    for (int i = 0; i < 6; i++) *--sp = 0;
     t->kernel_rsp = (uint64_t)sp;
 
     t->next = current_task->next;
