@@ -23,4 +23,6 @@ uint64_t *vmm_fork_pml4(void);
 
 uint64_t *vmm_create_pml4_clean(void);
 
+void vmm_identity_map_all(uint64_t max_addr);
+
 #endif

@@ -118,25 +118,17 @@ static uint64_t sys_spawn(const char *path, uint64_t uid) {
     if (!path) return (uint64_t)-1;
     term_write("[spawn] start\n");
 
-    term_write("[spawn] path bytes: ");
-    for (int i = 0; i < 16; i++) {
-        char c = path[i];
-        if (c >= 32 && c < 127) term_putchar(c);
-        else term_putchar('.');
-    }
-    term_write("\n");
-
     uint32_t size; uint8_t type;
-    if (vfs_stat(path, &size, &type) != 0) { term_write("[spawn] stat fail\n"); return (uint64_t)-1; }
-    term_write("[spawn] stat ok\n");
+    if (vfs_stat(path, &size, &type) != 0) { term_write("[spawn] stat FAIL\n"); return (uint64_t)-1; }
+    term_write("[spawn] stat OK\n");
 
     void *code = kmalloc(size);
-    if (!code) return (uint64_t)-1;
-    term_write("[spawn] kmalloc ok\n");
+    if (!code) { term_write("[spawn] kmalloc FAIL\n"); return (uint64_t)-1; }
+    term_write("[spawn] kmalloc OK\n");
 
     int fd = vfs_open(path, O_RDONLY);
-    if (fd < 0) { kfree(code); return (uint64_t)-1; }
-    term_write("[spawn] open ok\n");
+    if (fd < 0) { term_write("[spawn] open FAIL\n"); kfree(code); return (uint64_t)-1; }
+    term_write("[spawn] open OK\n");
 
     uint32_t total_read = 0;
     while (total_read < size) {
@@ -145,43 +137,42 @@ static uint64_t sys_spawn(const char *path, uint64_t uid) {
         total_read += bytes;
     }
     vfs_close(fd);
-    term_write("[spawn] read ok\n");
+    term_write("[spawn] read OK\n");
 
-    if (total_read != size) { kfree(code); term_write("[spawn] read incomplete\n"); return (uint64_t)-1; }
+    if (total_read != size) { term_write("[spawn] read INCOMPLETE\n"); kfree(code); return (uint64_t)-1; }
 
     uint64_t *new_pml4 = vmm_create_pml4_clean();
-    if (!new_pml4) { kfree(code); term_write("[spawn] pml4 fail\n"); return (uint64_t)-1; }
-    term_write("[spawn] pml4 ok\n");
+    if (!new_pml4) { term_write("[spawn] pml4 FAIL\n"); kfree(code); return (uint64_t)-1; }
+    term_write("[spawn] pml4 OK\n");
 
     uint64_t entry = 0;
     if (elf_load(code, size, new_pml4, &entry) != 0) {
+        term_write("[spawn] elf_load FAIL\n");
         kfree(code);
-        term_write("[spawn] elf_load fail\n");
         return (uint64_t)-1;
     }
+    term_write("[spawn] elf_load OK\n");
     kfree(code);
-    term_write("[spawn] elf_load ok\n");
 
     uint64_t user_stack_top = 0x7FFFFFFFF000;
     for (int i = 0; i < 16; i++) {
         void *stack_phys = pmm_alloc_page();
-        if (!stack_phys) return (uint64_t)-1;
+        if (!stack_phys) { term_write("[spawn] stack pmm FAIL\n"); return (uint64_t)-1; }
         memset(stack_phys, 0, 4096);
         uint64_t vaddr = user_stack_top - (i + 1) * 0x1000;
         if (vmm_map_page(new_pml4, vaddr, (uint64_t)stack_phys, 0x07) != 0) {
-            term_write("[spawn] map_page fail\n");
+            term_write("[spawn] stack map FAIL\n");
             return (uint64_t)-1;
         }
     }
-    term_write("[spawn] stack ok\n");
+    term_write("[spawn] stack OK\n");
 
     uint64_t user_rsp = user_stack_top - 16;
-
     struct task *t = task_create(entry, new_pml4, user_rsp);
-    if (!t) return (uint64_t)-1;
+    if (!t) { term_write("[spawn] task_create FAIL\n"); return (uint64_t)-1; }
 
     t->uid = (uint32_t)uid;
-    term_write("[spawn] task created\n");
+    term_write("[spawn] task created OK\n");
     return t->pid;
 }
 
@@ -231,96 +222,76 @@ static uint64_t sys_execve(struct regs *r, const char *path, char *const argv[])
 
     term_write("[execve] elf loaded OK\n");
 
-    // Выделяем 16 страниц (64 КБ) под стек
+    // === СТЕК НА 16 СТРАНИЦ (64 КБ) ===
     uint64_t user_stack_top = 0x7FFFFFFFF000;
-    uint64_t stack_phys_pages[16];
-
     for (int i = 0; i < 16; i++) {
         void *stack_phys = pmm_alloc_page();
-        if (!stack_phys) return (uint64_t)-1;
+        if (!stack_phys) { term_write("[execve] stack FAIL\n"); return (uint64_t)-1; }
         memset(stack_phys, 0, 4096);
-        stack_phys_pages[i] = (uint64_t)stack_phys;
         uint64_t vaddr = user_stack_top - (i + 1) * 0x1000;
         if (vmm_map_page(new_pml4, vaddr, (uint64_t)stack_phys, 0x07) != 0) {
+            term_write("[execve] map FAIL\n");
             return (uint64_t)-1;
         }
     }
 
-    // Сборка argv в куче ядра
     int argc = 0;
-    if (argv) {
-        while (argv[argc]) argc++;
-    }
+    if (argv) while (argv[argc]) argc++;
 
-    uint8_t *kstack = (uint8_t *)kmalloc(64 * 1024);
-    if (!kstack) return (uint64_t)-1;
-    uint64_t kstack_top = (uint64_t)kstack + 64 * 1024;
+    // 1. Собираем argv в KERNEL-КУЧЕ (в старой PML4 всё ещё)
+    uint8_t *kbuf = (uint8_t *)kmalloc(64 * 1024);
+    if (!kbuf) return (uint64_t)-1;
+    uint64_t kbuf_top = (uint64_t)kbuf + 64 * 1024;
 
-    uint64_t *argv_phys = (uint64_t *)kmalloc(sizeof(uint64_t) * (argc + 1));
-    if (!argv_phys) return (uint64_t)-1;
+    uint64_t *kargv_ptrs = (uint64_t *)kmalloc(sizeof(uint64_t) * (argc + 1));
+    if (!kargv_ptrs) { kfree(kbuf); return (uint64_t)-1; }
 
     for (int i = 0; i < argc; i++) {
         int len = 0;
         while (argv[i][len]) len++;
         len++;
-        kstack_top -= len;
-        memcpy((void*)kstack_top, argv[i], len);
-        argv_phys[i] = kstack_top;
+        kbuf_top -= len;
+        memcpy((void *)kbuf_top, argv[i], len);
+        kargv_ptrs[i] = kbuf_top;
     }
 
-    kstack_top &= ~0xFULL;
-    kstack_top -= 8; *(uint64_t*)kstack_top = 0;
-    kstack_top -= 8; *(uint64_t*)kstack_top = 0;
+    kbuf_top &= ~0xFULL;
+    kbuf_top -= 8; *(uint64_t *)kbuf_top = 0;  // envp NULL
+    kbuf_top -= 8; *(uint64_t *)kbuf_top = 0;  // argv[argc] NULL
 
     for (int i = argc - 1; i >= 0; i--) {
-        kstack_top -= 8;
-        uint64_t offset = (uint64_t)kstack + 64 * 1024 - argv_phys[i];
-        uint64_t virt_addr = user_stack_top - offset;
-        *(uint64_t*)kstack_top = virt_addr;
+        kbuf_top -= 8;
+        *(uint64_t *)kbuf_top = kargv_ptrs[i];
     }
 
-    if ((kstack_top & 0xF) != 8) {
-        kstack_top -= 8;
-        *(uint64_t*)kstack_top = 0;
-    }
+    if ((kbuf_top & 0xF) != 8) { kbuf_top -= 8; *(uint64_t *)kbuf_top = 0; }
+    kbuf_top -= 8;
+    *(uint64_t *)kbuf_top = argc;
 
-    kstack_top -= 8;
-    *(uint64_t*)kstack_top = argc;
+    uint64_t offset = (uint64_t)kbuf + 64 * 1024 - kbuf_top;
+    uint64_t user_rsp = user_stack_top - offset;
 
-    uint64_t offset_rsp = (uint64_t)kstack + 64 * 1024 - kstack_top;
-    uint64_t user_rsp = user_stack_top - offset_rsp;
-
-    // Копируем из кучи в физические страницы стека
-    uint64_t copy_size = (uint64_t)kstack + 64 * 1024 - kstack_top;
-    uint64_t copy_src = kstack_top;
-    uint64_t copy_dst_virt = user_rsp;
-
-    for (int i = 0; i < 16; i++) {
-        uint64_t page_virt = user_stack_top - (i + 1) * 0x1000;
-        if (copy_dst_virt < page_virt + 0x1000 && copy_dst_virt + copy_size > page_virt) {
-            uint64_t start_offset = (copy_dst_virt > page_virt) ? (copy_dst_virt - page_virt) : 0;
-            uint64_t end_offset = (copy_dst_virt + copy_size < page_virt + 0x1000) ? (copy_dst_virt + copy_size - page_virt) : 0x1000;
-            uint64_t bytes_to_copy = end_offset - start_offset;
-            uint64_t src_ptr = copy_src + (page_virt + start_offset - copy_dst_virt);
-            uint64_t dst_ptr = stack_phys_pages[i] + start_offset;
-            memcpy((void*)dst_ptr, (void*)src_ptr, bytes_to_copy);
-        }
-    }
-
-    kfree(kstack);
-    kfree(argv_phys);
-
+    // 2. ПЕРЕКЛЮЧАЕМ PML4 — теперь user stack доступен
     current_task->pml4 = new_pml4;
     __asm__ __volatile__("mov %0, %%cr3" :: "r"(new_pml4));
 
+    // 3. Копируем из kernel-кучи в user stack (уже в новой PML4)
+    memcpy((void *)user_rsp, (void *)kbuf_top, offset);
+
+    kfree(kargv_ptrs);
+    kfree(kbuf);
+
     r->rip = entry;
     r->rsp = user_rsp;
+    r->rax = 0;
+    r->rbx = 0;
+    r->rcx = 0;
+    r->rdx = 0;
+    r->rbp = 0;
+    r->rsi = 0;
+    r->rdi = 0;
 
-    r->rbx = 0; r->rbp = 0; r->r12 = 0; r->r13 = 0;
-    r->r14 = 0; r->r15 = 0; r->rsi = 0; r->rdi = 0;
-    r->rdx = 0; r->rcx = 0; r->rax = 0;
-
-    term_write("[execve] jumping to user space!\n");
+    term_write("[execve] jumping to user space\n");
     return 0;
 }
 

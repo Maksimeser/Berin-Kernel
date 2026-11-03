@@ -367,6 +367,8 @@ void kernel_main(struct boot_info *binfo) {
     }
 
     pmm_init();
+    vmm_identity_map_all(0x8000000ULL); // 128MB
+    term_write("[paging] identity-mapped 128MB\n");
     idt_init();
     pic_remap();
     pit_init(100);
@@ -421,7 +423,8 @@ void kernel_main(struct boot_info *binfo) {
             vfs_read(fd, code, init_size);
             vfs_close(fd);
 
-            uint64_t *new_pml4 = vmm_create_pml4();
+            uint64_t *new_pml4 = vmm_create_pml4_clean();
+            term_write("[kernel] new_pml4="); put_hex64((uint64_t)new_pml4); term_write("\n");
             uint64_t entry = 0;
             if (new_pml4 && elf_load(code, init_size, new_pml4, &entry) == 0) {
                 kfree(code);

@@ -50,8 +50,10 @@ static uint8_t *alloc_kstack(void) {
 }
 
 struct task *task_create(uint64_t entry, uint64_t *pml4, uint64_t user_rsp) {
+    term_write("[tc] kmalloc...\n");
     struct task *t = (struct task *)kmalloc(sizeof(struct task));
-    if (!t) return 0;
+    if (!t) { term_write("[tc] kmalloc FAIL\n"); return 0; }
+    term_write("[tc] kmalloc OK\n");
     memset(t, 0, sizeof(struct task));
     t->uid = 0;
     t->gid = 0;
@@ -60,11 +62,33 @@ struct task *task_create(uint64_t entry, uint64_t *pml4, uint64_t user_rsp) {
     t->state = TASK_READY;
     t->pml4 = pml4;
 
+    term_write("[tc] kstack...\n");
     uint8_t *kstack = alloc_kstack();
-    if (!kstack) return 0;
+    if (!kstack) { term_write("[tc] kstack FAIL\n"); kfree(t); return 0; }
+    term_write("[tc] kstack OK\n");
     t->kstack_base = kstack;
     t->kstack_top  = (uint64_t)kstack + KSTACK_PAGES * 4096;
 
+    // Мапим struct task и стек ядра в новую PML4
+    extern uint64_t vmm_get_phys(uint64_t *pml4, uint64_t vaddr);
+    extern int vmm_map_page(uint64_t *pml4, uint64_t vaddr, uint64_t paddr, uint64_t flags);
+
+    term_write("[tc] map task...\n");
+    uint64_t t_phys = vmm_get_phys(current_task->pml4, (uint64_t)t);
+    if (t_phys) {
+        vmm_map_page(pml4, (uint64_t)t, t_phys, 0x03);
+    }
+
+    term_write("[tc] map kstack...\n");
+    for (int i = 0; i < KSTACK_PAGES; i++) {
+        uint64_t kstack_vaddr = (uint64_t)kstack + i * 4096;
+        uint64_t kstack_phys = vmm_get_phys(current_task->pml4, kstack_vaddr);
+        if (kstack_phys) {
+            vmm_map_page(pml4, kstack_vaddr, kstack_phys, 0x03);
+        }
+    }
+
+    term_write("[tc] push iretq...\n");
     uint64_t *sp = (uint64_t *)t->kstack_top;
     *--sp = 0x23;
     *--sp = user_rsp;
@@ -78,6 +102,7 @@ struct task *task_create(uint64_t entry, uint64_t *pml4, uint64_t user_rsp) {
     t->next = current_task->next;
     current_task->next = t;
 
+    term_write("[tc] done\n");
     return t;
 }
 
