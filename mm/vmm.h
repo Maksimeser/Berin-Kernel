@@ -21,4 +21,6 @@ void vmm_switch_pml4(uint64_t *pml4);
 
 uint64_t *vmm_fork_pml4(void);
 
+uint64_t *vmm_create_pml4_clean(void);
+
 #endif

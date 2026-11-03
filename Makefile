@@ -3,7 +3,7 @@ CC      := gcc
 AS      := nasm
 LD      := ld
 
-CFLAGS  := -m64 -std=gnu11 -ffreestanding -fno-stack-protector \
+CFLAGS  := -m64 -std=gnu23 -ffreestanding -fno-stack-protector \
            -fno-pic -fno-pie -mno-red-zone \
            -mno-mmx -mno-avx -mno-80387 -mgeneral-regs-only \
            -Wall -Wextra -O2 \

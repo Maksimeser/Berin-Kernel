@@ -49,7 +49,8 @@ static uint64_t sys_read(uint64_t fd, void *buf, uint64_t len) {
             if (c == 3) return (uint64_t)-2; // Ctrl+C
             if (c == '\r' || c == '\n') { term_putchar('\n'); p[n++] = '\n'; break; }
             if (c == 0x7F || c == '\b') {
-                if (n > 0) { n--; term_putchar('\b'); term_putchar(' '); term_putchar('\b'); }
+                if (n > 0) { term_putchar('\b'); term_putchar(' '); term_putchar('\b'); }
+                p[n++] = (uint8_t)c;
                 continue;
             }
             if ((unsigned char)c < 0x20) continue;
@@ -115,145 +116,198 @@ static uint64_t sys_exit(uint64_t code) {
 
 static uint64_t sys_spawn(const char *path, uint64_t uid) {
     if (!path) return (uint64_t)-1;
+    term_write("[spawn] start\n");
+
+    term_write("[spawn] path bytes: ");
+    for (int i = 0; i < 16; i++) {
+        char c = path[i];
+        if (c >= 32 && c < 127) term_putchar(c);
+        else term_putchar('.');
+    }
+    term_write("\n");
 
     uint32_t size; uint8_t type;
-    if (vfs_stat(path, &size, &type) != 0) return (uint64_t)-1;
+    if (vfs_stat(path, &size, &type) != 0) { term_write("[spawn] stat fail\n"); return (uint64_t)-1; }
+    term_write("[spawn] stat ok\n");
 
     void *code = kmalloc(size);
     if (!code) return (uint64_t)-1;
+    term_write("[spawn] kmalloc ok\n");
 
     int fd = vfs_open(path, O_RDONLY);
     if (fd < 0) { kfree(code); return (uint64_t)-1; }
-    vfs_read(fd, code, size);
-    vfs_close(fd);
+    term_write("[spawn] open ok\n");
 
-    uint64_t *new_pml4 = vmm_create_pml4();
-    if (!new_pml4) { kfree(code); return (uint64_t)-1; }
+    uint32_t total_read = 0;
+    while (total_read < size) {
+        int bytes = vfs_read(fd, (uint8_t*)code + total_read, size - total_read);
+        if (bytes <= 0) break;
+        total_read += bytes;
+    }
+    vfs_close(fd);
+    term_write("[spawn] read ok\n");
+
+    if (total_read != size) { kfree(code); term_write("[spawn] read incomplete\n"); return (uint64_t)-1; }
+
+    uint64_t *new_pml4 = vmm_create_pml4_clean();
+    if (!new_pml4) { kfree(code); term_write("[spawn] pml4 fail\n"); return (uint64_t)-1; }
+    term_write("[spawn] pml4 ok\n");
 
     uint64_t entry = 0;
     if (elf_load(code, size, new_pml4, &entry) != 0) {
         kfree(code);
+        term_write("[spawn] elf_load fail\n");
         return (uint64_t)-1;
     }
+    kfree(code);
+    term_write("[spawn] elf_load ok\n");
 
-    kfree(code); // Теперь код загружен в память, сам файл можно удалить
-
-    void *stack_phys = pmm_alloc_page();
-    if (!stack_phys) {
-        // Тут в идеале освободить new_pml4, но пока оставим так, чтобы не усложнять
-        return (uint64_t)-1;
+    uint64_t user_stack_top = 0x7FFFFFFFF000;
+    for (int i = 0; i < 16; i++) {
+        void *stack_phys = pmm_alloc_page();
+        if (!stack_phys) return (uint64_t)-1;
+        memset(stack_phys, 0, 4096);
+        uint64_t vaddr = user_stack_top - (i + 1) * 0x1000;
+        if (vmm_map_page(new_pml4, vaddr, (uint64_t)stack_phys, 0x07) != 0) {
+            term_write("[spawn] map_page fail\n");
+            return (uint64_t)-1;
+        }
     }
+    term_write("[spawn] stack ok\n");
 
-    // ДОБАВИТЬ: зануляем стек, чтобы не было мусора (теперь безопасно)
-    extern void *memset(void *dst, int c, size_t n);
-    memset(stack_phys, 0, 4096);
-
-    uint64_t user_stack_vaddr = 0x7FFFFFFFE000;
-
-    // Мапим стек с флагами User (0x07)
-    if (vmm_map_page(new_pml4, user_stack_vaddr, (uint64_t)stack_phys, 0x07) != 0) {
-        pmm_free_page(stack_phys);
-        return (uint64_t)-1;
-    }
-
-    uint64_t user_rsp = user_stack_vaddr + 4096 - 16;
+    uint64_t user_rsp = user_stack_top - 16;
 
     struct task *t = task_create(entry, new_pml4, user_rsp);
     if (!t) return (uint64_t)-1;
 
     t->uid = (uint32_t)uid;
-    return t->pid;
-}
-
-static uint64_t sys_fork(struct regs *r) {
-    uint64_t *new_pml4 = vmm_fork_pml4();
-    if (!new_pml4) return (uint64_t)-1;
-
-    struct task *t = task_create(r->rip, new_pml4, r->rsp);
-    if (!t) return (uint64_t)-1;
-
-    t->uid = current_task->uid;
-
+    term_write("[spawn] task created\n");
     return t->pid;
 }
 
 /* ================= ДИСПЕТЧЕР ================= */
-
 static uint64_t sys_execve(struct regs *r, const char *path, char *const argv[]) {
     if (!path) return (uint64_t)-1;
 
+    term_write("[execve] start\n");
+
     uint32_t size; uint8_t type;
-    if (vfs_stat(path, &size, &type) != 0) return (uint64_t)-1;
+    if (vfs_stat(path, &size, &type) != 0) {
+        term_write("[execve] stat FAILED\n");
+        return (uint64_t)-1;
+    }
 
     void *code = kmalloc(size);
     if (!code) return (uint64_t)-1;
 
     int fd = vfs_open(path, O_RDONLY);
     if (fd < 0) { kfree(code); return (uint64_t)-1; }
-    vfs_read(fd, code, size);
+
+    uint32_t total_read = 0;
+    while (total_read < size) {
+        int bytes = vfs_read(fd, (uint8_t*)code + total_read, size - total_read);
+        if (bytes <= 0) break;
+        total_read += bytes;
+    }
     vfs_close(fd);
 
-    uint64_t *new_pml4 = vmm_create_pml4();
-    if (!new_pml4) { kfree(code); return (uint64_t)-1; }
+    if (total_read != size) {
+        term_write("[execve] read incomplete!\n");
+        kfree(code);
+        return (uint64_t)-1;
+    }
 
+    term_write("[execve] file read OK\n");
+
+    uint64_t *new_pml4 = current_task->pml4;
     uint64_t entry = 0;
+
     if (elf_load(code, size, new_pml4, &entry) != 0) {
+        term_write("[execve] elf_load FAILED\n");
         kfree(code);
         return (uint64_t)-1;
     }
     kfree(code);
 
-    void *stack_phys = pmm_alloc_page();
-    if (!stack_phys) return (uint64_t)-1;
-    extern void *memset(void *dst, int c, size_t n);
-    memset(stack_phys, 0, 4096);
+    term_write("[execve] elf loaded OK\n");
 
-    uint64_t user_stack_vaddr = 0x7FFFFFFFE000;
-    vmm_map_page(new_pml4, user_stack_vaddr, (uint64_t)stack_phys, 0x07);
+    // Выделяем 16 страниц (64 КБ) под стек
+    uint64_t user_stack_top = 0x7FFFFFFFF000;
+    uint64_t stack_phys_pages[16];
 
-    // --- СБОРКА СТЕКА АРГУМЕНТОВ ---
+    for (int i = 0; i < 16; i++) {
+        void *stack_phys = pmm_alloc_page();
+        if (!stack_phys) return (uint64_t)-1;
+        memset(stack_phys, 0, 4096);
+        stack_phys_pages[i] = (uint64_t)stack_phys;
+        uint64_t vaddr = user_stack_top - (i + 1) * 0x1000;
+        if (vmm_map_page(new_pml4, vaddr, (uint64_t)stack_phys, 0x07) != 0) {
+            return (uint64_t)-1;
+        }
+    }
+
+    // Сборка argv в куче ядра
     int argc = 0;
     if (argv) {
         while (argv[argc]) argc++;
     }
 
-    // Временный массив для физических адресов строк
+    uint8_t *kstack = (uint8_t *)kmalloc(64 * 1024);
+    if (!kstack) return (uint64_t)-1;
+    uint64_t kstack_top = (uint64_t)kstack + 64 * 1024;
+
     uint64_t *argv_phys = (uint64_t *)kmalloc(sizeof(uint64_t) * (argc + 1));
     if (!argv_phys) return (uint64_t)-1;
 
-    uint64_t stack_phys_top = (uint64_t)stack_phys + 4096;
-
-    // 1. Копируем строки на стек
     for (int i = 0; i < argc; i++) {
         int len = 0;
-        while (argv[i][len]) len++; // Считаем длину
-        len++; // +1 для нуль-терминатора
-
-        stack_phys_top -= len;
-        memcpy((void*)stack_phys_top, argv[i], len);
-        argv_phys[i] = stack_phys_top;
+        while (argv[i][len]) len++;
+        len++;
+        kstack_top -= len;
+        memcpy((void*)kstack_top, argv[i], len);
+        argv_phys[i] = kstack_top;
     }
 
-    // 2. Выравниваем стек по 16 байт (требование ABI)
-    stack_phys_top &= ~0xFULL;
-
-    // 3. Формируем стек: envp(NULL), argv[argc](NULL), argv[], argc
-    stack_phys_top -= 8; *(uint64_t*)stack_phys_top = 0; // envp
-
-    stack_phys_top -= 8; *(uint64_t*)stack_phys_top = 0; // NULL для argv
+    kstack_top &= ~0xFULL;
+    kstack_top -= 8; *(uint64_t*)kstack_top = 0;
+    kstack_top -= 8; *(uint64_t*)kstack_top = 0;
 
     for (int i = argc - 1; i >= 0; i--) {
-        stack_phys_top -= 8;
-        // Переводим физический адрес обратно в виртуальный для программы
-        uint64_t virt_addr = user_stack_vaddr + (argv_phys[i] - (uint64_t)stack_phys);
-        *(uint64_t*)stack_phys_top = virt_addr;
+        kstack_top -= 8;
+        uint64_t offset = (uint64_t)kstack + 64 * 1024 - argv_phys[i];
+        uint64_t virt_addr = user_stack_top - offset;
+        *(uint64_t*)kstack_top = virt_addr;
     }
 
-    stack_phys_top -= 8;
-    *(uint64_t*)stack_phys_top = argc; // argc
+    if ((kstack_top & 0xF) != 8) {
+        kstack_top -= 8;
+        *(uint64_t*)kstack_top = 0;
+    }
 
-    uint64_t user_rsp = user_stack_vaddr + (stack_phys_top - (uint64_t)stack_phys);
+    kstack_top -= 8;
+    *(uint64_t*)kstack_top = argc;
 
+    uint64_t offset_rsp = (uint64_t)kstack + 64 * 1024 - kstack_top;
+    uint64_t user_rsp = user_stack_top - offset_rsp;
+
+    // Копируем из кучи в физические страницы стека
+    uint64_t copy_size = (uint64_t)kstack + 64 * 1024 - kstack_top;
+    uint64_t copy_src = kstack_top;
+    uint64_t copy_dst_virt = user_rsp;
+
+    for (int i = 0; i < 16; i++) {
+        uint64_t page_virt = user_stack_top - (i + 1) * 0x1000;
+        if (copy_dst_virt < page_virt + 0x1000 && copy_dst_virt + copy_size > page_virt) {
+            uint64_t start_offset = (copy_dst_virt > page_virt) ? (copy_dst_virt - page_virt) : 0;
+            uint64_t end_offset = (copy_dst_virt + copy_size < page_virt + 0x1000) ? (copy_dst_virt + copy_size - page_virt) : 0x1000;
+            uint64_t bytes_to_copy = end_offset - start_offset;
+            uint64_t src_ptr = copy_src + (page_virt + start_offset - copy_dst_virt);
+            uint64_t dst_ptr = stack_phys_pages[i] + start_offset;
+            memcpy((void*)dst_ptr, (void*)src_ptr, bytes_to_copy);
+        }
+    }
+
+    kfree(kstack);
     kfree(argv_phys);
 
     current_task->pml4 = new_pml4;
@@ -262,6 +316,11 @@ static uint64_t sys_execve(struct regs *r, const char *path, char *const argv[])
     r->rip = entry;
     r->rsp = user_rsp;
 
+    r->rbx = 0; r->rbp = 0; r->r12 = 0; r->r13 = 0;
+    r->r14 = 0; r->r15 = 0; r->rsi = 0; r->rdi = 0;
+    r->rdx = 0; r->rcx = 0; r->rax = 0;
+
+    term_write("[execve] jumping to user space!\n");
     return 0;
 }
 
@@ -290,28 +349,22 @@ static uint64_t sys_wait4(uint64_t pid, int *status) {
     extern void schedule(void);
     extern int task_reap(uint32_t pid);
 
-    // Если pid == -1, ждем любого ребенка (пока для простоты ищем по конкретному)
     for (;;) {
         struct task *t = current_task->next;
         int found = 0;
-
-        // Ищем ребенка в списке
-        while (t != current_task) {
+        while (t && t != current_task) {
             if (t->pid == pid && t->parent_pid == current_task->pid) {
                 found = 1;
                 if (t->state == TASK_ZOMBIE) {
                     int code = task_reap(t->pid);
                     if (status) *status = code;
-                    return pid; // Ребенок умер и собран
+                    return pid;
                 }
-                break; // Ребенок есть, но еще живой
+                break;
             }
             t = t->next;
         }
-
-        if (!found) return (uint64_t)-1; // Нет такого ребенка
-
-        // Если ребенок жив, засыпаем
+        if (!found) return (uint64_t)-1;
         current_task->state = TASK_WAITING;
         schedule();
     }
@@ -340,6 +393,22 @@ static uint64_t sys_shutdown(void) {
     return 0;
 }
 
+static uint64_t sys_fork(struct regs *r) {
+    term_write("[fork] start\n");
+    uint64_t *new_pml4 = vmm_fork_pml4();
+    term_write("[fork] pml4 done\n");
+
+    if (!new_pml4) return (uint64_t)-1;
+
+    struct task *t = task_create(r->rip, new_pml4, r->rsp);
+    term_write("[fork] task done\n");
+
+    if (!t) return (uint64_t)-1;
+
+    t->uid = current_task->uid;
+    return t->pid;
+}
+
 void syscall_dispatch(struct regs *r) {
     __asm__ __volatile__("sti");
 
@@ -365,7 +434,15 @@ void syscall_dispatch(struct regs *r) {
         case 61:          ret = sys_wait4(a1, (int *)a2);            break;
         case 102:         ret = sys_getuid();                        break;
         case 103:         ret = sys_setuid(a1);                      break;
-        case 200:         ret = sys_spawn((const char *)a1, a2);     break;
+        case 200:
+            term_write("[syscall 200] rdi=0x");
+            for (int i = 60; i >= 0; i -= 4) {
+                int d = (a1 >> i) & 0xF;
+                term_putchar(d < 10 ? '0' + d : 'a' + d - 10);
+            }
+            term_write("\n");
+            ret = sys_spawn((const char *)a1, a2);
+            break;
         case 210:         ret = sys_reboot();                        break;
         case 211:         ret = sys_shutdown();                      break;
         default:          term_write("[sys] unknown syscall\n");     break;

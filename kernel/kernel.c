@@ -392,7 +392,7 @@ void kernel_main(struct boot_info *binfo) {
     sched_init();
 
     const char *init_paths[] = {
-        "/sbin/init", "/bin/init", "/bin/login.elf", "/bin/berbash.elf", 0
+        "/sbin/init", "/bin/init", "/login.elf", "/berbash.elf", 0
     };
 
     const char *init_to_run = 0;

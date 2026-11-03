@@ -11,16 +11,18 @@ switch_to:
     push r12
     push rbp
     push rbx
+    push rax
 
     mov [rdi + 32], rsp
     mov rsp, [rsi + 32]
 
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop rbp
+    pop rax
     pop rbx
+    pop rbp
+    pop r12
+    pop r13
+    pop r14
+    pop r15
     ret
 
 global task_ret_to_user

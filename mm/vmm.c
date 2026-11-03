@@ -93,7 +93,7 @@ uint64_t *vmm_fork_pml4(void) {
                     for (int k = 0; k < 512; k++) {
                         if (old_pd[k] & PTE_PRESENT) {
                             if (old_pd[k] & (1ULL << 7)) {
-                                new_pd[k] = old_pd[k]; // Huge page
+                                new_pd[k] = old_pd[k];
                             } else {
                                 uint64_t *old_pt = (uint64_t *)(old_pd[k] & ~0xFFF);
                                 uint64_t *new_pt = (uint64_t *)pmm_alloc_page();
@@ -103,11 +103,16 @@ uint64_t *vmm_fork_pml4(void) {
 
                                 for (int l = 0; l < 512; l++) {
                                     if (old_pt[l] & PTE_PRESENT) {
-                                        void *new_phys = pmm_alloc_page();
-                                        if (!new_phys) return 0;
-                                        void *old_phys = (void *)(old_pt[l] & ~0xFFF);
-                                        memcpy(new_phys, old_phys, PAGE_SIZE);
-                                        new_pt[l] = (uint64_t)new_phys | (old_pt[l] & 0xFFF);
+                                        uint64_t vaddr = ((uint64_t)i << 39) | ((uint64_t)j << 30) | ((uint64_t)k << 21) | ((uint64_t)l << 12);
+                                        if (vaddr >= 0x80000000ULL && vaddr < 0x80400000ULL) {
+                                            new_pt[l] = old_pt[l];
+                                        } else {
+                                            void *new_phys = pmm_alloc_page();
+                                            if (!new_phys) return 0;
+                                            void *old_phys = (void *)(old_pt[l] & ~0xFFF);
+                                            memcpy(new_phys, old_phys, PAGE_SIZE);
+                                            new_pt[l] = (uint64_t)new_phys | (old_pt[l] & 0xFFF);
+                                        }
                                     }
                                 }
                             }
@@ -184,4 +189,65 @@ int vmm_map_page(uint64_t *pml4, uint64_t vaddr, uint64_t paddr, uint64_t flags)
     pt[idx_pt] = paddr | flags;
     __asm__ __volatile__("invlpg (%0)" :: "r"(vaddr) : "memory");
     return 0;
+}
+
+uint64_t *vmm_create_pml4_clean(void) {
+    uint64_t *old_pml4 = (uint64_t *)read_cr3();
+    uint64_t *new_pml4 = (uint64_t *)pmm_alloc_page();
+    if (!new_pml4) return 0;
+    memset(new_pml4, 0, PAGE_SIZE);
+
+    // Kernel half — share
+    for (int i = 256; i < 512; i++) new_pml4[i] = old_pml4[i];
+
+    // User half — deep copy
+    for (int i = 0; i < 256; i++) {
+        if (!(old_pml4[i] & PTE_PRESENT)) continue;
+
+        uint64_t *old_pdpt = (uint64_t *)(old_pml4[i] & ~0xFFF);
+        uint64_t *new_pdpt = (uint64_t *)pmm_alloc_page();
+        if (!new_pdpt) return 0;
+        memset(new_pdpt, 0, PAGE_SIZE);
+        new_pml4[i] = (uint64_t)new_pdpt | (old_pml4[i] & 0xFFF);
+
+        for (int j = 0; j < 512; j++) {
+            if (!(old_pdpt[j] & PTE_PRESENT)) continue;
+
+            uint64_t *old_pd = (uint64_t *)(old_pdpt[j] & ~0xFFF);
+            uint64_t *new_pd = (uint64_t *)pmm_alloc_page();
+            if (!new_pd) return 0;
+            memset(new_pd, 0, PAGE_SIZE);
+            new_pdpt[j] = (uint64_t)new_pd | (old_pdpt[j] & 0xFFF);
+
+            for (int k = 0; k < 512; k++) {
+                if (!(old_pd[k] & PTE_PRESENT)) continue;
+                if (old_pd[k] & (1ULL << 7)) {
+                    // 2MB huge page (framebuffer) — share, чтобы term_putchar работал
+                    new_pd[k] = old_pd[k];
+                    continue;
+                }
+                uint64_t *old_pt = (uint64_t *)(old_pd[k] & ~0xFFF);
+                uint64_t *new_pt = (uint64_t *)pmm_alloc_page();
+                if (!new_pt) return 0;
+                memset(new_pt, 0, PAGE_SIZE);
+                new_pd[k] = (uint64_t)new_pt | (old_pd[k] & 0xFFF);
+
+                for (int l = 0; l < 512; l++) {
+                    if (!(old_pt[l] & PTE_PRESENT)) continue;
+                    // Если это фреймбуфер (0x80000000+), шарим
+                    uint64_t vaddr = ((uint64_t)i << 39) | ((uint64_t)j << 30) | ((uint64_t)k << 21) | ((uint64_t)l << 12);
+                    if (vaddr >= 0x80000000ULL && vaddr < 0x80400000ULL) {
+                        new_pt[l] = old_pt[l]; // shared
+                    } else {
+                        void *new_phys = pmm_alloc_page();
+                        if (!new_phys) return 0;
+                        void *old_phys = (void *)(old_pt[l] & ~0xFFF);
+                        memcpy(new_phys, old_phys, PAGE_SIZE);
+                        new_pt[l] = (uint64_t)new_phys | (old_pt[l] & 0xFFF);
+                    }
+                }
+            }
+        }
+    }
+    return new_pml4;
 }

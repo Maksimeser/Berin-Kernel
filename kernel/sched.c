@@ -6,7 +6,10 @@
 #include "paging.h"
 #include "gdt.h"
 
-#define KSTACK_PAGES 1   /* 1 страница = 4 КБ, нам хватит */
+extern void term_write(const char *s);
+extern void term_putchar(char c);
+
+#define KSTACK_PAGES 1
 
 /* PID 0 (idle) — статически в .bss */
 static struct task idle_task;
@@ -69,7 +72,7 @@ struct task *task_create(uint64_t entry, uint64_t *pml4, uint64_t user_rsp) {
     *--sp = 0x1B;
     *--sp = entry;
     *--sp = (uint64_t)task_ret_to_user;
-    for (int i = 0; i < 6; i++) *--sp = 0;
+    for (int i = 0; i < 7; i++) *--sp = 0;
     t->kernel_rsp = (uint64_t)sp;
 
     t->next = current_task->next;
