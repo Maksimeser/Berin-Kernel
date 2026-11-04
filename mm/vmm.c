@@ -1,3 +1,4 @@
+#include "kdebug.h"
 #include "vmm.h"
 #include "pmm.h"
 #include "kstring.h"
@@ -150,15 +151,15 @@ uint64_t *vmm_create_pml4_clean(void) {
 }
 
 uint64_t *vmm_fork_pml4(void) {
-    term_write("[vf] start\n");
+    KLOG("[vf] start\n");
     uint64_t *old_pml4 = (uint64_t *)read_cr3();
     vmm_identity_map_into(old_pml4);
-    term_write("[vf] imap done\n");
+    KLOG("[vf] imap done\n");
 
     uint64_t *new_pml4 = (uint64_t *)pmm_alloc_page();
-    if (!new_pml4) { term_write("[vf] FAIL pml4\n"); return 0; }
+    if (!new_pml4) { KLOG("[vf] FAIL pml4\n"); return 0; }
     memset(new_pml4, 0, PAGE_SIZE);
-    term_write("[vf] pml4 alloc ok\n");
+    KLOG("[vf] pml4 alloc ok\n");
 
     for (int i = 256; i < 512; i++) new_pml4[i] = old_pml4[i];
 
@@ -167,7 +168,7 @@ uint64_t *vmm_fork_pml4(void) {
 
         uint64_t *old_pdpt = (uint64_t *)(old_pml4[i] & ~0xFFF);
         uint64_t *new_pdpt = (uint64_t *)pmm_alloc_page();
-        if (!new_pdpt) { term_write("[vf] FAIL pdpt\n"); return 0; }
+        if (!new_pdpt) { KLOG("[vf] FAIL pdpt\n"); return 0; }
         memset(new_pdpt, 0, PAGE_SIZE);
         new_pml4[i] = (uint64_t)new_pdpt | (old_pml4[i] & 0xFFF);
 
@@ -176,7 +177,7 @@ uint64_t *vmm_fork_pml4(void) {
 
             uint64_t *old_pd = (uint64_t *)(old_pdpt[j] & ~0xFFF);
             uint64_t *new_pd = (uint64_t *)pmm_alloc_page();
-            if (!new_pd) { term_write("[vf] FAIL pd\n"); return 0; }
+            if (!new_pd) { KLOG("[vf] FAIL pd\n"); return 0; }
             memset(new_pd, 0, PAGE_SIZE);
             new_pdpt[j] = (uint64_t)new_pd | (old_pdpt[j] & 0xFFF);
 
@@ -193,7 +194,7 @@ uint64_t *vmm_fork_pml4(void) {
 
                 uint64_t *old_pt = (uint64_t *)(old_pd[k] & ~0xFFF);
                 uint64_t *new_pt = (uint64_t *)pmm_alloc_page();
-                if (!new_pt) { term_write("[vf] FAIL pt\n"); return 0; }
+                if (!new_pt) { KLOG("[vf] FAIL pt\n"); return 0; }
                 memset(new_pt, 0, PAGE_SIZE);
                 new_pd[k] = (uint64_t)new_pt | (old_pd[k] & 0xFFF);
 
@@ -211,7 +212,7 @@ uint64_t *vmm_fork_pml4(void) {
                         continue;
                     }
                     void *new_phys = pmm_alloc_page();
-                    if (!new_phys) { term_write("[vf] FAIL user_phys\n"); return 0; }
+                    if (!new_phys) { KLOG("[vf] FAIL user_phys\n"); return 0; }
                     void *old_phys = (void *)(pte & ~0xFFF);
                     memcpy(new_phys, old_phys, PAGE_SIZE);
                     new_pt[l] = (uint64_t)new_phys | (pte & 0xFFF);
@@ -221,7 +222,7 @@ uint64_t *vmm_fork_pml4(void) {
     }
 
     vmm_identity_map_into(new_pml4);
-    term_write("[vf] done\n");
+    KLOG("[vf] done\n");
     return new_pml4;
 }
 

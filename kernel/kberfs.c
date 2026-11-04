@@ -335,7 +335,8 @@ static int file_read_bytes(struct berfs_mount *m, const struct berfs_inode *in,
                                                                         while (*pos < dir->i_size) {
                                                                             struct berfs_dirent de;
                                                                             if (file_read_bytes(m, dir, *pos, &de, sizeof(de)) != 0) return -1;
-                                                                            if (de.d_inode == 0 || de.d_reclen == 0) { *pos += de.d_reclen; continue; }
+                                                                            if (de.d_reclen == 0) return -1;
+                                                                            if (de.d_inode == 0) { *pos += de.d_reclen; continue; }
                                                                             if (file_read_bytes(m, dir, *pos + sizeof(de), name, de.d_name_len) != 0) return -1;
                                                                             name[de.d_name_len] = '\0';
                                                                             *ino = de.d_inode;

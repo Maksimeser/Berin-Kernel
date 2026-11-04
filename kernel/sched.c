@@ -1,3 +1,4 @@
+#include "kdebug.h"
 #include "sched.h"
 #include "heap.h"
 #include "pmm.h"
@@ -49,11 +50,11 @@ static uint8_t *alloc_kstack(void) {
     return (uint8_t *)pmm_alloc_page();
 }
 
-struct task *task_create(uint64_t entry, uint64_t *pml4, uint64_t user_rsp) {
-    term_write("[tc] kmalloc...\n");
+struct task *task_create(struct regs *parent_regs, uint64_t *pml4, uint64_t entry, uint64_t user_rsp) {
+    KLOG("[tc] kmalloc...\n");
     struct task *t = (struct task *)kmalloc(sizeof(struct task));
-    if (!t) { term_write("[tc] kmalloc FAIL\n"); return 0; }
-    term_write("[tc] kmalloc OK\n");
+    if (!t) { KLOG("[tc] kmalloc FAIL\n"); return 0; }
+    KLOG("[tc] kmalloc OK\n");
     memset(t, 0, sizeof(struct task));
     t->uid = 0;
     t->gid = 0;
@@ -62,24 +63,23 @@ struct task *task_create(uint64_t entry, uint64_t *pml4, uint64_t user_rsp) {
     t->state = TASK_READY;
     t->pml4 = pml4;
 
-    term_write("[tc] kstack...\n");
+    KLOG("[tc] kstack...\n");
     uint8_t *kstack = alloc_kstack();
-    if (!kstack) { term_write("[tc] kstack FAIL\n"); kfree(t); return 0; }
-    term_write("[tc] kstack OK\n");
+    if (!kstack) { KLOG("[tc] kstack FAIL\n"); kfree(t); return 0; }
+    KLOG("[tc] kstack OK\n");
     t->kstack_base = kstack;
     t->kstack_top  = (uint64_t)kstack + KSTACK_PAGES * 4096;
 
-    // Мапим struct task и стек ядра в новую PML4
     extern uint64_t vmm_get_phys(uint64_t *pml4, uint64_t vaddr);
     extern int vmm_map_page(uint64_t *pml4, uint64_t vaddr, uint64_t paddr, uint64_t flags);
 
-    term_write("[tc] map task...\n");
+    KLOG("[tc] map task...\n");
     uint64_t t_phys = vmm_get_phys(current_task->pml4, (uint64_t)t);
     if (t_phys) {
         vmm_map_page(pml4, (uint64_t)t, t_phys, 0x03);
     }
 
-    term_write("[tc] map kstack...\n");
+    KLOG("[tc] map kstack...\n");
     for (int i = 0; i < KSTACK_PAGES; i++) {
         uint64_t kstack_vaddr = (uint64_t)kstack + i * 4096;
         uint64_t kstack_phys = vmm_get_phys(current_task->pml4, kstack_vaddr);
@@ -88,21 +88,39 @@ struct task *task_create(uint64_t entry, uint64_t *pml4, uint64_t user_rsp) {
         }
     }
 
-    term_write("[tc] push iretq...\n");
+    KLOG("[tc] push iretq...\n");
     uint64_t *sp = (uint64_t *)t->kstack_top;
+
+    // 1. iretq-фрейм: SS, RSP, RFLAGS, CS, RIP
     *--sp = 0x23;
     *--sp = user_rsp;
     *--sp = 0x202;
     *--sp = 0x1B;
     *--sp = entry;
+
+    // 2. Ret-адрес: switch_to сделает `ret` сюда, task_ret_to_user сделает iretq
     *--sp = (uint64_t)task_ret_to_user;
-    for (int i = 0; i < 7; i++) *--sp = 0;
+
+    // 3. GP-регистры в порядке pop в switch_to: r15, r14, r13, r12, rbp, rbx, rax
+    //    (rax — последний push, sp указывает на него)
+    if (parent_regs) {
+        *--sp = parent_regs->r15;
+        *--sp = parent_regs->r14;
+        *--sp = parent_regs->r13;
+        *--sp = parent_regs->r12;
+        *--sp = 0;
+        *--sp = parent_regs->rbx;
+        *--sp = 0;
+    } else {
+        for (int i = 0; i < 7; i++) *--sp = 0;
+    }
+
     t->kernel_rsp = (uint64_t)sp;
 
     t->next = current_task->next;
     current_task->next = t;
 
-    term_write("[tc] done\n");
+    KLOG("[tc] done\n");
     return t;
 }
 

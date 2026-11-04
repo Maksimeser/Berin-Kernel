@@ -7,6 +7,7 @@
 #include "kberfs.h"
 #include "ata.h"
 #include "fat32.h"
+#include "klog.h"
 #include "elf.h"
 #include "vmm.h"
 #include "sched.h"
@@ -69,6 +70,7 @@ static int builtin_help(int argc, char **argv) {
     term_write("  fatls         list files in FAT32 root (dsk001)\n");
     term_write("  bcat <name>   print file contents\n");
     term_write("  elf <name>    load ELF from disk and run\n");
+    term_write("  kdebug on/off toggle kernel debug logs (tc/vf/fork/...)\n");
     term_write("  disks         list block devices (dsk000)\n");
     term_write("  uptime        ticks since boot\n");
     term_write("  bread         read BerFS superblock from disk\n");
@@ -246,6 +248,25 @@ static int builtin_halt(int argc, char **argv) {
     term_write("[ INFO ] halt: stopping CPU\n");
     for (;;) __asm__ __volatile__("cli; hlt");
     return 42;
+}
+
+static int builtin_kdebug(int argc, char **argv) {
+    if (argc < 2) {
+        term_write("kdebug: ");
+        term_write(klog_enabled() ? "on" : "off");
+        term_putchar('\n');
+        return 0;
+    }
+    if (str_eq(argv[1], "on")) {
+        klog_set(1);
+        term_write("[ OK ] kdebug on\n");
+    } else if (str_eq(argv[1], "off")) {
+        klog_set(0);
+        term_write("[ OK ] kdebug off\n");
+    } else {
+        term_write("usage: kdebug [on|off]\n");
+    }
+    return 0;
 }
 
 static int builtin_bread(int argc, char **argv) {
@@ -502,6 +523,7 @@ static struct builtin builtins[] = {
     { "crash",   builtin_crash   },
     { "pf",      builtin_pf      },
     { "fatls",   builtin_fatls   },
+    { "kdebug",  builtin_kdebug  },
     { "reboot",  builtin_reboot  },
     { "heap",    builtin_heap    },
     { "kmtest",  builtin_kmtest  },

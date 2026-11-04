@@ -349,11 +349,6 @@ void kernel_main(struct boot_info *binfo) {
     }
 
     gdt_init();
-    term_set_fg(C_LGREEN);
-    term_set_bg(C_BLACK);
-    term_clear();
-    term_write("\n");
-
     heap_init();
     vfs_init();
     bdev_init();
@@ -388,7 +383,7 @@ void kernel_main(struct boot_info *binfo) {
 
     __asm__ __volatile__("sti");
 
-    term_write("Berin 0.0.4 loaded!\n\n");
+    term_write("Berin 0.0.4 loaded!\n");
 
     __asm__ __volatile__("wbinvd");
     sched_init();
@@ -434,9 +429,9 @@ void kernel_main(struct boot_info *binfo) {
                 vmm_map_page(new_pml4, user_stack_vaddr, (uint64_t)stack_phys, 0x07);
                 uint64_t user_rsp = user_stack_vaddr + 4096 - 16;
 
-                struct task *t = task_create(entry, new_pml4, user_rsp);
+                struct task *t = task_create(NULL, new_pml4, entry, user_rsp);
                 if (t) {
-                    term_write("[ init ] started as PID 1\n");
+                    term_write("[ init ] started\n");
                     extern void idle_loop(void);
                     idle_loop();
                 } else {

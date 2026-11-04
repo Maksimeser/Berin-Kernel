@@ -21,7 +21,7 @@ C_SRCS  := kernel/kernel.c kernel/panic.c kernel/elf.c kernel/kstring.c \
            mm/pmm.c mm/paging.c mm/heap.c mm/vmm.c \
            arch/x86_64/gdt.c arch/x86_64/idt.c arch/x86_64/pic.c arch/x86_64/pit.c arch/x86_64/syscall.c \
            drivers/keyboard.c drivers/ata.c \
-           recovery/kerbash.c
+           recovery/kerbash.c build/kernel/klog.o
 
 ASM_SRCS := boot/boot.asm arch/x86_64/isr_stubs.asm arch/x86_64/switch.asm
 

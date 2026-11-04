@@ -31,7 +31,8 @@ struct task {
     void    *kstack_base;
 };
 void sched_init(void);
-struct task *task_create(uint64_t entry, uint64_t *pml4, uint64_t user_rsp);
+struct regs;
+struct task *task_create(struct regs *parent_regs, uint64_t *pml4, uint64_t entry, uint64_t user_rsp);
 void schedule(void);
 void task_exit(int code);
 
