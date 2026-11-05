@@ -106,8 +106,8 @@ static uint64_t sys_unlink(const char *path) {
 
 /* ================= ПРОЦЕССЫ ================= */
 static uint64_t sys_exit(uint64_t code) {
-    KLOG("[exit pid="); term_putchar('0' + (current_task->pid % 10));
-    term_write(" code="); term_putchar('0' + (code % 10)); term_write("\n");
+    KLOG("[exit] pid="); KLOGP('0' + (current_task->pid % 10));
+    term_write(" code="); KLOGP('0' + (code % 10)); term_write("\n");
     if (current_task && current_task->pid == 1) {
         extern void term_write(const char *s);
         term_write("\n[ FATAL ] init exited. System halted.\n");
@@ -120,19 +120,19 @@ static uint64_t sys_exit(uint64_t code) {
 
 static uint64_t sys_spawn(const char *path, uint64_t uid) {
     if (!path) return (uint64_t)-1;
-    KLOG("[spawn start\n");
+    KLOG("[spawn] start\n");
 
     uint32_t size; uint8_t type;
-    if (vfs_stat(path, &size, &type) != 0) { KLOG("[spawn stat FAIL\n"); return (uint64_t)-1; }
-    KLOG("[spawn stat OK\n");
+    if (vfs_stat(path, &size, &type) != 0) { KLOG("[spawn] stat FAIL\n"); return (uint64_t)-1; }
+    KLOG("[spawn] stat OK\n");
 
     void *code = kmalloc(size);
-    if (!code) { KLOG("[spawn kmalloc FAIL\n"); return (uint64_t)-1; }
-    KLOG("[spawn kmalloc OK\n");
+    if (!code) { KLOG("[spawn] kmalloc FAIL\n"); return (uint64_t)-1; }
+    KLOG("[spawn] kmalloc OK\n");
 
     int fd = vfs_open(path, O_RDONLY);
-    if (fd < 0) { KLOG("[spawn open FAIL\n"); kfree(code); return (uint64_t)-1; }
-    KLOG("[spawn open OK\n");
+    if (fd < 0) { KLOG("[spawn] open FAIL\n"); kfree(code); return (uint64_t)-1; }
+    KLOG("[spawn] open OK\n");
 
     uint32_t total_read = 0;
     while (total_read < size) {
@@ -141,42 +141,42 @@ static uint64_t sys_spawn(const char *path, uint64_t uid) {
         total_read += bytes;
     }
     vfs_close(fd);
-    KLOG("[spawn read OK\n");
+    KLOG("[spawn] read OK\n");
 
-    if (total_read != size) { KLOG("[spawn read INCOMPLETE\n"); kfree(code); return (uint64_t)-1; }
+    if (total_read != size) { KLOG("[spawn] read INCOMPLETE\n"); kfree(code); return (uint64_t)-1; }
 
     uint64_t *new_pml4 = vmm_create_pml4_clean();
-    if (!new_pml4) { KLOG("[spawn pml4 FAIL\n"); kfree(code); return (uint64_t)-1; }
-    KLOG("[spawn pml4 OK\n");
+    if (!new_pml4) { KLOG("[spawn] pml4 FAIL\n"); kfree(code); return (uint64_t)-1; }
+    KLOG("[spawn] pml4 OK\n");
 
     uint64_t entry = 0;
     if (elf_load(code, size, new_pml4, &entry) != 0) {
-        KLOG("[spawn elf_load FAIL\n");
+        KLOG("[spawn] elf_load FAIL\n");
         kfree(code);
         return (uint64_t)-1;
     }
-    KLOG("[spawn elf_load OK\n");
+    KLOG("[spawn] elf_load OK\n");
     kfree(code);
 
     uint64_t user_stack_top = 0x7FFFFFFFF000;
     for (int i = 0; i < 16; i++) {
         void *stack_phys = pmm_alloc_page();
-        if (!stack_phys) { KLOG("[spawn stack pmm FAIL\n"); return (uint64_t)-1; }
+        if (!stack_phys) { KLOG("[spawn] stack pmm FAIL\n"); return (uint64_t)-1; }
         memset(stack_phys, 0, 4096);
         uint64_t vaddr = user_stack_top - (i + 1) * 0x1000;
         if (vmm_map_page(new_pml4, vaddr, (uint64_t)stack_phys, 0x07) != 0) {
-            KLOG("[spawn stack map FAIL\n");
+            KLOG("[spawn] stack map FAIL\n");
             return (uint64_t)-1;
         }
     }
-    KLOG("[spawn stack OK\n");
+    KLOG("[spawn] stack OK\n");
 
     uint64_t user_rsp = user_stack_top - 16;
     struct task *t = task_create(NULL, new_pml4, entry, user_rsp);
-    if (!t) { KLOG("[spawn task_create FAIL\n"); return (uint64_t)-1; }
+    if (!t) { KLOG("[spawn] task_create FAIL\n"); return (uint64_t)-1; }
 
     t->uid = (uint32_t)uid;
-    KLOG("[spawn task created OK\n");
+    KLOG("[spawn] task created OK\n");
     return t->pid;
 }
 
@@ -186,15 +186,15 @@ static uint64_t sys_execve(struct regs *r, const char *path, char *const argv[])
 
     uint32_t size; uint8_t type;
     if (vfs_stat(path, &size, &type) != 0) {
-        KLOG("[execve stat FAILED\n");
+        KLOG("[execve] stat FAILED\n");
         return (uint64_t)-1;
     }
 
     /* 1. читаем ELF в старом пространстве */
     void *code = kmalloc(size);
-    if (!code) { KLOG("[execve code FAIL\n"); return (uint64_t)-1; }
+    if (!code) { KLOG("[execve] code FAIL\n"); return (uint64_t)-1; }
     int fd = vfs_open(path, O_RDONLY);
-    if (fd < 0) { KLOG("[execve open FAIL\n"); kfree(code); return (uint64_t)-1; }
+    if (fd < 0) { KLOG("[execve] open FAIL\n"); kfree(code); return (uint64_t)-1; }
     uint32_t total = 0;
     while (total < size) {
         int n = vfs_read(fd, (uint8_t*)code + total, size - total);
@@ -202,16 +202,16 @@ static uint64_t sys_execve(struct regs *r, const char *path, char *const argv[])
         total += n;
     }
     vfs_close(fd);
-    if (total != size) { KLOG("[execve read FAIL\n"); kfree(code); return (uint64_t)-1; }
+    if (total != size) { KLOG("[execve] read FAIL\n"); kfree(code); return (uint64_t)-1; }
 
     /* 2. собираем argv в kernel-буфере ЗАРАНЕЕ */
     int argc = 0;
     if (argv) while (argv[argc] && argc < 128) argc++;
 
     uint8_t *kbuf = kmalloc(4 * 1024);
-    if (!kbuf) { KLOG("[execve kbuf FAIL\n"); kfree(code); return (uint64_t)-1; }
+    if (!kbuf) { KLOG("[execve] kbuf FAIL\n"); kfree(code); return (uint64_t)-1; }
     uint64_t *kargv_ptrs = kmalloc(sizeof(uint64_t) * (argc + 1));
-    if (!kargv_ptrs) { KLOG("[execve kargv FAIL\n"); kfree(kbuf); kfree(code); return (uint64_t)-1; }
+    if (!kargv_ptrs) { KLOG("[execve] kargv FAIL\n"); kfree(kbuf); kfree(code); return (uint64_t)-1; }
 
     uint64_t kbuf_top = (uint64_t)kbuf + 4 * 1024;
     for (int i = 0; i < argc; i++) {
@@ -224,11 +224,11 @@ static uint64_t sys_execve(struct regs *r, const char *path, char *const argv[])
 
     /* 3. новый pml4 + ELF туда */
     uint64_t *new_pml4 = vmm_create_pml4_clean();
-    if (!new_pml4) { KLOG("[execve pml4 FAIL\n"); kfree(kargv_ptrs); kfree(kbuf); kfree(code); return (uint64_t)-1; }
+    if (!new_pml4) { KLOG("[execve] pml4 FAIL\n"); kfree(kargv_ptrs); kfree(kbuf); kfree(code); return (uint64_t)-1; }
 
     uint64_t entry = 0;
     if (elf_load(code, size, new_pml4, &entry) != 0) {
-        KLOG("[execve elf_load FAIL\n");
+        KLOG("[execve] elf_load FAIL\n");
         kfree(kargv_ptrs); kfree(kbuf); kfree(code);
         return (uint64_t)-1;
     }
@@ -238,10 +238,10 @@ static uint64_t sys_execve(struct regs *r, const char *path, char *const argv[])
     uint64_t user_stack_top = 0x7FFFFFFFF000;
     for (int i = 0; i < 16; i++) {
         void *sp = pmm_alloc_page();
-        if (!sp) { KLOG("[execve stack alloc FAIL\n"); kfree(kargv_ptrs); kfree(kbuf); return (uint64_t)-1; }
+        if (!sp) { KLOG("[execve] stack alloc FAIL\n"); kfree(kargv_ptrs); kfree(kbuf); return (uint64_t)-1; }
         memset(sp, 0, 4096);
         if (vmm_map_page(new_pml4, user_stack_top - (i+1)*0x1000, (uint64_t)sp, 0x07) != 0) {
-            KLOG("[execve stack map FAIL\n");
+            KLOG("[execve] stack map FAIL\n");
             kfree(kargv_ptrs); kfree(kbuf); return (uint64_t)-1;
         }
     }
@@ -249,7 +249,7 @@ static uint64_t sys_execve(struct regs *r, const char *path, char *const argv[])
     /* 5. ФИНАЛЬНЫЙ switch cr3 */
     current_task->pml4 = new_pml4;
     __asm__ __volatile__("mov %0, %%cr3" :: "r"(new_pml4));
-    KLOG("[execve cr3 switched\n");
+    KLOG("[execve] cr3 switched\n");
 
     /* 6. ТОЛЬКО ТЕПЕРЬ раскладываем argv в user stack (новый cr3) */
     uint64_t stack_ptr = user_stack_top - 16;
@@ -275,7 +275,7 @@ static uint64_t sys_execve(struct regs *r, const char *path, char *const argv[])
     kfree(kargv_ptrs);
     kfree(kbuf);
 
-    KLOG("[execve jump to entry=0x");
+    KLOG("[execve] jump to entry=0x");
     for (int i = 60; i >= 0; i -= 4) { int d = (entry >> i) & 0xF; term_putchar(d < 10 ? '0'+d : 'A'+d-10); }
     term_write(" rsp=0x");
     for (int i = 60; i >= 0; i -= 4) { int d = (stack_ptr >> i) & 0xF; term_putchar(d < 10 ? '0'+d : 'A'+d-10); }
@@ -308,7 +308,7 @@ static uint64_t sys_read_noecho(void *buf, uint64_t len) {
 }
 
 static uint64_t sys_wait4(uint64_t pid, int *status) {
-    KLOG("[wait4 start pid="); term_putchar('0' + (pid % 10)); term_write("\n");
+    KLOG("[wait4] start pid="); KLOGP('0' + (pid % 10)); term_write("\n");
     extern struct task *current_task;
     extern void schedule(void);
     extern int task_reap(uint32_t pid);
@@ -322,14 +322,14 @@ static uint64_t sys_wait4(uint64_t pid, int *status) {
                 if (t->state == TASK_ZOMBIE) {
                     int code = task_reap(t->pid);
                     if (status) *status = code;
-                    KLOG("[wait4 reaped pid="); term_putchar('0' + (pid % 10)); term_write("\n");
+                    KLOG("[wait4] reaped pid="); KLOGP('0' + (pid % 10)); term_write("\n");
                     return pid;
                 }
                 break;
             }
             t = t->next;
         }
-        if (!found) { KLOG("[wait4 not found\n"); return (uint64_t)-1; }
+        if (!found) { KLOG("[wait4] not found\n"); return (uint64_t)-1; }
         current_task->state = TASK_WAITING;
         schedule();
     }
@@ -359,18 +359,18 @@ static uint64_t sys_shutdown(void) {
 }
 
 static uint64_t sys_fork(struct regs *r) {
-    KLOG("[fork rip=0x");
+    KLOG("[fork] rip=0x");
     for (int i = 60; i >= 0; i -= 4) { int d = (r->rip >> i) & 0xF; term_putchar(d < 10 ? '0'+d : 'A'+d-10); }
     term_write(" rsp=0x");
     for (int i = 60; i >= 0; i -= 4) { int d = (r->rsp >> i) & 0xF; term_putchar(d < 10 ? '0'+d : 'A'+d-10); }
     term_write("\n");
-    KLOG("[fork start\n");
+    KLOG("[fork] start\n");
     uint64_t *new_pml4 = vmm_fork_pml4();
-    KLOG("[fork pml4 done\n");
+    KLOG("[fork] pml4 done\n");
     if (!new_pml4) return (uint64_t)-1;
 
     struct task *t = task_create(r, new_pml4, r->rip, r->rsp);
-    KLOG("[fork task done\n");
+    KLOG("[fork] task done\n");
     if (!t) return (uint64_t)-1;
 
     t->uid = current_task->uid;
@@ -402,21 +402,12 @@ void syscall_dispatch(struct regs *r) {
         case 61:          ret = sys_wait4(a1, (int *)a2);            break;
         case 102:         ret = sys_getuid();                        break;
         case 103:         ret = sys_setuid(a1);                      break;
-        case 200: {
-            KLOG("[syscall 200] rdi=0x");
-            for (int i = 60; i >= 0; i -= 4) {
-                int d = (a1 >> i) & 0xF;
-                term_putchar(d < 10 ? '0' + d : 'a' + d - 10);
-            }
-            term_write("\n");
-            ret = sys_spawn((const char *)a1, a2);
-            break;
-        }
+        case 200:         ret = sys_spawn((const char *)a1, a2);     break;
         case 210:         ret = sys_reboot();                        break;
         case 211:         ret = sys_shutdown();                      break;
         case 212:         klog_set((int)a1);              ret = 0;   break;
         case 213:         ret = (uint64_t)klog_enabled();            break;
-        default:          KLOG("[sys unknown syscall\n");     break;
+        default:          KLOG("[sys unknown syscall\n");            break;
     }
     r->rax = ret;
 }

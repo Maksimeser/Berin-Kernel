@@ -432,6 +432,7 @@ void kernel_main(struct boot_info *binfo) {
                 struct task *t = task_create(NULL, new_pml4, entry, user_rsp);
                 if (t) {
                     term_write("[ init ] started\n");
+                    klog_set(0);
                     extern void idle_loop(void);
                     idle_loop();
                 } else {

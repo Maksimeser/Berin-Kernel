@@ -392,7 +392,11 @@ static int file_read_bytes(struct berfs_mount *m, const struct berfs_inode *in,
                                                                                                                  uint32_t start_pos = pos;
                                                                                                                  struct berfs_dirent de;
                                                                                                                  if (file_read_bytes(m, dir_inode, pos, &de, sizeof(de)) != 0) return -1;
-                                                                                                                 if (de.d_inode == 0) { pos += de.d_reclen; continue; }
+                                                                                                                 if (de.d_inode == 0 || de.d_reclen == 0) {
+                                                                                                                     if (de.d_reclen == 0) return -1;
+                                                                                                                     pos += de.d_reclen;
+                                                                                                                     continue;
+                                                                                                                 }
 
                                                                                                                  char entry_name[BERFS_NAME_MAX + 1];
                                                                                                                  if (file_read_bytes(m, dir_inode, pos + sizeof(de), entry_name, de.d_name_len) != 0) return -1;
