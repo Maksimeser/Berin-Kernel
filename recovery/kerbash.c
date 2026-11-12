@@ -102,7 +102,7 @@ static int builtin_about(int argc, char **argv) {
 
 static int builtin_versi(int argc, char **argv) {
     (void)argc; (void)argv;
-    term_write("Berin kernel 0.0.3 \"Sorsha\"\n");
+    term_write("Berin kernel 0.0.4 \"Sorsha\"\n");
     term_write("  kernel   0.0.3   x86_64, long mode\n");
     term_write("  kerbash  0.3     kernel shell\n");
     term_write("  serial   0.1     COM1 115200 8N1\n");
@@ -539,7 +539,7 @@ static struct builtin builtins[] = {
 };
 
 static void print_prompt(void) {
-    term_write("\033[90m[\033[91mroot\033[90m@\033[92mberin\033[90m \033[94m/\033[90m]\033[97m# \033[0m");
+    term_write("\033[90m[\033[91mkerbash\033[90m@\033[92mberin\033[90m \033[94m/\033[90m]\033[97m# \033[0m");
 }
 
 static void print_command_not_found(const char *name) {

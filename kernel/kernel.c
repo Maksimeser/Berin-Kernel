@@ -6,6 +6,7 @@
 #include "ata.h"
 #include "vfs.h"
 #include "gdt.h"
+#include "klog.h"
 #include "fat32.h"
 #include "paging.h"
 #include "sched.h"
@@ -353,6 +354,8 @@ void kernel_main(struct boot_info *binfo) {
     vfs_init();
     bdev_init();
 
+    term_write("Berin 0.0.4 loaded!\n\n");
+
     int mrc = berfs_mount_fs(&g_root);
     if (mrc != 0) {
         term_write("[ WARN ] berfs mount: "); put_u64((uint64_t)mrc); term_putchar('\n');
@@ -382,9 +385,6 @@ void kernel_main(struct boot_info *binfo) {
     }
 
     __asm__ __volatile__("sti");
-
-    term_write("Berin 0.0.4 loaded!\n");
-
     __asm__ __volatile__("wbinvd");
     sched_init();
 
@@ -432,7 +432,7 @@ void kernel_main(struct boot_info *binfo) {
                 struct task *t = task_create(NULL, new_pml4, entry, user_rsp);
                 if (t) {
                     term_write("[ init ] started\n");
-                    klog_set(0);
+                    klog_set(1);
                     extern void idle_loop(void);
                     idle_loop();
                 } else {

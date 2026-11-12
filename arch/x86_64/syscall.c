@@ -359,12 +359,8 @@ static uint64_t sys_shutdown(void) {
 }
 
 static uint64_t sys_fork(struct regs *r) {
-    KLOG("[fork] rip=0x");
-    for (int i = 60; i >= 0; i -= 4) { int d = (r->rip >> i) & 0xF; term_putchar(d < 10 ? '0'+d : 'A'+d-10); }
-    term_write(" rsp=0x");
-    for (int i = 60; i >= 0; i -= 4) { int d = (r->rsp >> i) & 0xF; term_putchar(d < 10 ? '0'+d : 'A'+d-10); }
-    term_write("\n");
     KLOG("[fork] start\n");
+    
     uint64_t *new_pml4 = vmm_fork_pml4();
     KLOG("[fork] pml4 done\n");
     if (!new_pml4) return (uint64_t)-1;
